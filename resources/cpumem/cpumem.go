@@ -5,13 +5,13 @@ import (
 	resourcetypes "github.com/projecteru2/core/resources/types"
 	"github.com/projecteru2/core/scheduler"
 	"github.com/projecteru2/core/types"
-	"github.com/projecteru2/core/utils"
 )
 
 type cpuMemRequest struct {
 	CPUQuotaRequest float64
 	CPUQuotaLimit   float64
 	CPUBind         bool
+	CPU             types.CPUMap
 
 	memoryRequest int64
 	memoryLimit   int64
@@ -25,6 +25,7 @@ func MakeRequest(opts types.ResourceOptions) (resourcetypes.ResourceRequest, err
 		CPUBind:         opts.CPUBind,
 		memoryRequest:   opts.MemoryRequest,
 		memoryLimit:     opts.MemoryLimit,
+		CPU:             opts.CPU,
 	}
 	return cmr, cmr.Validate()
 }
@@ -68,17 +69,20 @@ func (cm *cpuMemRequest) Validate() error {
 
 // MakeScheduler .
 func (cm cpuMemRequest) MakeScheduler() resourcetypes.SchedulerV2 {
-	return func(nodesInfo []types.NodeInfo) (plans resourcetypes.ResourcePlans, total int, err error) {
+	return func(scheduleInfos []resourcetypes.ScheduleInfo) (plans resourcetypes.ResourcePlans, total int, err error) {
 		schedulerV1, err := scheduler.GetSchedulerV1()
 		if err != nil {
 			return
 		}
 
 		var CPUPlans map[string][]types.CPUMap
-		if !cm.CPUBind || cm.CPUQuotaRequest == 0 {
-			nodesInfo, total, err = schedulerV1.SelectMemoryNodes(nodesInfo, cm.CPUQuotaRequest, cm.memoryRequest)
-		} else {
-			nodesInfo, CPUPlans, total, err = schedulerV1.SelectCPUNodes(nodesInfo, cm.CPUQuotaRequest, cm.memoryRequest)
+		switch {
+		case !cm.CPUBind || cm.CPUQuotaRequest == 0:
+			scheduleInfos, total, err = schedulerV1.SelectMemoryNodes(scheduleInfos, cm.CPUQuotaRequest, cm.memoryRequest)
+		case cm.CPU != nil:
+			scheduleInfos[0], CPUPlans, total, err = schedulerV1.ReselectCPUNodes(scheduleInfos[0], cm.CPU, cm.CPUQuotaRequest, cm.memoryRequest)
+		default:
+			scheduleInfos, CPUPlans, total, err = schedulerV1.SelectCPUNodes(scheduleInfos, cm.CPUQuotaRequest, cm.memoryRequest)
 		}
 		return ResourcePlans{
 			memoryRequest:   cm.memoryRequest,
@@ -86,7 +90,7 @@ func (cm cpuMemRequest) MakeScheduler() resourcetypes.SchedulerV2 {
 			CPUQuotaRequest: cm.CPUQuotaRequest,
 			CPUQuotaLimit:   cm.CPUQuotaLimit,
 			CPUPlans:        CPUPlans,
-			capacity:        utils.GetCapacity(nodesInfo),
+			capacity:        resourcetypes.GetCapacity(scheduleInfos),
 		}, total, err
 	}
 }

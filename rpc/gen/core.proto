@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package pb;
 
+option go_package = "github.com/projecteru2/core/rpc/gen";
+
 service CoreRPC {
     rpc Info(Empty) returns (CoreInfo) {};
     rpc WatchServiceStatus(Empty) returns (stream ServiceStatus) {};
@@ -406,6 +408,7 @@ message DeployOptions {
         FILL = 1;
         EACH = 2;
         GLOBAL = 3;
+        FILLGLOBAL = 4;
         DUMMY = 99;
     }
     string name = 1;
@@ -419,7 +422,6 @@ message DeployOptions {
     repeated string dns = 9;
     repeated string extra_hosts = 10;
     map<string, string> networks = 11;
-    string networkmode = 12;
     string user = 13;
     bool debug = 14;
     bool openStdin = 15;
@@ -532,11 +534,10 @@ message ReallocResourceMessage {
 
 message CopyMessage {
     string id = 1;
-    string status = 2;
-    string name = 3;
-    string path = 4;
-    string error = 5;
-    bytes data = 6;
+    string name = 2;
+    string path = 3;
+    string error = 4;
+    bytes data = 5;
 }
 
 message SendMessage {
@@ -574,6 +575,7 @@ message LogStreamOptions {
     string tail = 2;
     string since = 3;
     string until = 4;
+    bool follow = 5;
 }
 
 message LogStreamMessage {

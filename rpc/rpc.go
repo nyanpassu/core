@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/projecteru2/core/cluster"
+	"github.com/projecteru2/core/log"
 	pb "github.com/projecteru2/core/rpc/gen"
 	"github.com/projecteru2/core/types"
-	"github.com/projecteru2/core/versioninfo"
-	log "github.com/sirupsen/logrus"
+	"github.com/projecteru2/core/version"
 	"golang.org/x/net/context"
 )
 
@@ -31,9 +31,9 @@ type Vibranium struct {
 // Info show core info
 func (v *Vibranium) Info(ctx context.Context, opts *pb.Empty) (*pb.CoreInfo, error) {
 	return &pb.CoreInfo{
-		Version:       versioninfo.VERSION,
-		Revison:       versioninfo.REVISION,
-		BuildAt:       versioninfo.BUILTAT,
+		Version:       version.VERSION,
+		Revison:       version.REVISION,
+		BuildAt:       version.BUILTAT,
 		GolangVersion: runtime.Version(),
 		OsArch:        fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
 	}, nil
@@ -157,6 +157,8 @@ func (v *Vibranium) ListPodNodes(ctx context.Context, opts *pb.ListNodesOptions)
 		return nil, err
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, v.config.GlobalTimeout)
+	defer cancel()
 	nodes := []*pb.Node{}
 	for _, n := range ns {
 		nodes = append(nodes, toRPCNode(ctx, n))
@@ -342,19 +344,12 @@ func (v *Vibranium) Copy(opts *pb.CopyOptions, stream pb.CoreRPC_CopyServer) err
 		return err
 	}
 	// 4K buffer
-	bsize := 4 * 1024
+	p := make([]byte, 4096)
 	for m := range ch {
-		var copyError string
+		msg := &pb.CopyMessage{Id: m.ID, Name: m.Name, Path: m.Path}
 		if m.Error != nil {
-			copyError = fmt.Sprintf("%v", m.Error)
-			if err := stream.Send(&pb.CopyMessage{
-				Id:     m.ID,
-				Status: m.Status,
-				Name:   m.Name,
-				Path:   m.Path,
-				Error:  copyError,
-				Data:   []byte{},
-			}); err != nil {
+			msg.Error = m.Error.Error()
+			if err := stream.Send(msg); err != nil {
 				v.logUnsentMessages("Copy", m)
 			}
 			continue
@@ -362,40 +357,43 @@ func (v *Vibranium) Copy(opts *pb.CopyOptions, stream pb.CoreRPC_CopyServer) err
 
 		r, w := io.Pipe()
 		go func() {
-			defer w.Close()
+			var err error
+			defer func() {
+				w.CloseWithError(err) // nolint
+			}()
 			defer m.Data.Close()
 
+			var bs []byte
 			tw := tar.NewWriter(w)
-			bs, err := ioutil.ReadAll(m.Data)
-			if err != nil {
+			if bs, err = ioutil.ReadAll(m.Data); err != nil {
 				log.Errorf("[Copy] Error during extracting copy data: %v", err)
+				return
 			}
 			header := &tar.Header{Name: m.Name, Mode: 0644, Size: int64(len(bs))}
-			if err := tw.WriteHeader(header); err != nil {
+			if err = tw.WriteHeader(header); err != nil {
 				log.Errorf("[Copy] Error during writing tarball header: %v", err)
+				return
 			}
-			if _, err := tw.Write(bs); err != nil {
+			if _, err = tw.Write(bs); err != nil {
 				log.Errorf("[Copy] Error during writing tarball content: %v", err)
+				return
 			}
 		}()
 
 		for {
-			p := make([]byte, bsize)
 			n, err := r.Read(p)
 			if err != nil {
 				if err != io.EOF {
 					log.Errorf("[Copy] Error during buffer resp: %v", err)
+					msg.Error = err.Error()
+					if err = stream.Send(msg); err != nil {
+						v.logUnsentMessages("Copy", m)
+					}
 				}
 				break
 			}
-			if err = stream.Send(&pb.CopyMessage{
-				Id:     m.ID,
-				Status: m.Status,
-				Name:   m.Name,
-				Path:   m.Path,
-				Error:  copyError,
-				Data:   p[:n],
-			}); err != nil {
+			msg.Data = p[:n]
+			if err = stream.Send(msg); err != nil {
 				v.logUnsentMessages("Copy", m)
 			}
 		}
@@ -464,7 +462,7 @@ func (v *Vibranium) CacheImage(opts *pb.CacheImageOptions, stream pb.CoreRPC_Cac
 	v.taskAdd("CacheImage", true)
 	defer v.taskDone("CacheImage", true)
 
-	ch, err := v.cluster.CacheImage(stream.Context(), opts.Podname, opts.Nodenames, opts.Images, int(opts.Step))
+	ch, err := v.cluster.CacheImage(stream.Context(), toCoreCacheImageOptions(opts))
 	if err != nil {
 		return err
 	}
@@ -482,7 +480,7 @@ func (v *Vibranium) RemoveImage(opts *pb.RemoveImageOptions, stream pb.CoreRPC_R
 	v.taskAdd("RemoveImage", true)
 	defer v.taskDone("RemoveImage", true)
 
-	ch, err := v.cluster.RemoveImage(stream.Context(), opts.Podname, opts.Nodenames, opts.Images, int(opts.Step), opts.Prune)
+	ch, err := v.cluster.RemoveImage(stream.Context(), toCoreRemoveImageOptions(opts))
 	if err != nil {
 		return err
 	}
@@ -711,7 +709,11 @@ func (v *Vibranium) LogStream(opts *pb.LogStreamOptions, stream pb.CoreRPC_LogSt
 	log.Infof("[LogStream] Get %s log start", ID)
 	defer log.Infof("[LogStream] Get %s log done", ID)
 	ch, err := v.cluster.LogStream(stream.Context(), &types.LogStreamOptions{
-		ID: ID, Tail: opts.Tail, Since: opts.Since, Until: opts.Until,
+		ID:     ID,
+		Tail:   opts.Tail,
+		Since:  opts.Since,
+		Until:  opts.Until,
+		Follow: opts.Follow,
 	})
 	if err != nil {
 		return err
@@ -809,12 +811,24 @@ func (v *Vibranium) RunAndWait(stream pb.CoreRPC_RunAndWaitServer) error {
 					}
 				}
 			}()
-			scanner := bufio.NewScanner(r)
-			for scanner.Scan() {
-				log.Infof("[Async RunAndWait] %v", scanner.Text())
-			}
-			if err := scanner.Err(); err != nil {
-				log.Errorf("Async RunAndWait] scan error: %v", err)
+			bufReader := bufio.NewReader(r)
+			for {
+				var (
+					line, part []byte
+					isPrefix   bool
+					err        error
+				)
+				for {
+					if part, isPrefix, err = bufReader.ReadLine(); err != nil {
+						log.Errorf("[Aysnc RunAndWait] read error: %+v", err)
+						return
+					}
+					line = append(line, part...)
+					if !isPrefix {
+						break
+					}
+				}
+				log.Infof("[Async RunAndWait] %s", line)
 			}
 		})
 	}()

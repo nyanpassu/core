@@ -16,7 +16,7 @@ func TestAddNode(t *testing.T) {
 	ctx := context.Background()
 	name := "test"
 	node := &types.Node{
-		Name: name,
+		NodeMeta: types.NodeMeta{Name: name},
 	}
 
 	store := &storemocks.Store{}
@@ -28,7 +28,15 @@ func TestAddNode(t *testing.T) {
 		mock.Anything, mock.Anything, mock.Anything).Return(node, nil)
 	c.store = store
 
-	n, err := c.AddNode(ctx, &types.AddNodeOptions{})
+	// fail by validating
+	_, err := c.AddNode(ctx, &types.AddNodeOptions{})
+	assert.Error(t, err)
+
+	n, err := c.AddNode(ctx, &types.AddNodeOptions{
+		Nodename: "nodename",
+		Podname:  "podname",
+		Endpoint: "endpoint",
+	})
 	assert.NoError(t, err)
 	assert.Equal(t, n.Name, name)
 }
@@ -37,25 +45,37 @@ func TestRemoveNode(t *testing.T) {
 	c := NewTestCluster()
 	ctx := context.Background()
 
+	// fail by validating
+	assert.Error(t, c.RemoveNode(ctx, ""))
+
 	name := "test"
-	node := &types.Node{Name: name}
+	node := &types.Node{NodeMeta: types.NodeMeta{Name: name}}
 	store := &storemocks.Store{}
+	c.store = store
+
 	lock := &lockmocks.DistributedLock{}
-	lock.On("Lock", mock.Anything).Return(nil)
+	lock.On("Lock", mock.Anything).Return(context.TODO(), nil)
 	lock.On("Unlock", mock.Anything).Return(nil)
 	store.On("CreateLock", mock.Anything, mock.Anything).Return(lock, nil)
 
 	store.On("GetNode",
 		mock.Anything,
 		mock.Anything).Return(node, nil)
+	// fail, ListNodeWorkloads fail
+	store.On("ListNodeWorkloads", mock.Anything, mock.Anything, mock.Anything).Return([]*types.Workload{}, types.ErrNoETCD).Once()
+	assert.Error(t, c.RemoveNode(ctx, name))
+	// fail, node still has associated workloads
+	store.On("ListNodeWorkloads", mock.Anything, mock.Anything, mock.Anything).Return([]*types.Workload{{}}, nil).Once()
+	assert.Error(t, c.RemoveNode(ctx, name))
+
+	// succeed
+	store.On("ListNodeWorkloads", mock.Anything, mock.Anything, mock.Anything).Return([]*types.Workload{}, nil)
 	store.On("RemoveNode", mock.Anything, mock.Anything).Return(nil)
 	pod := &types.Pod{Name: name}
 	store.On("GetPod", mock.Anything, mock.Anything).Return(pod, nil)
-	c.store = store
 
 	store.On("GetNodesByPod", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*types.Node{node}, nil)
-	err := c.RemoveNode(ctx, name)
-	assert.NoError(t, err)
+	assert.NoError(t, c.RemoveNode(ctx, name))
 }
 
 func TestListPodNodes(t *testing.T) {
@@ -64,8 +84,8 @@ func TestListPodNodes(t *testing.T) {
 	name1 := "test1"
 	name2 := "test2"
 	nodes := []*types.Node{
-		{Name: name1, Available: true},
-		{Name: name2, Available: false},
+		{NodeMeta: types.NodeMeta{Name: name1}, Available: true},
+		{NodeMeta: types.NodeMeta{Name: name2}, Available: false},
 	}
 
 	store := &storemocks.Store{}
@@ -86,16 +106,21 @@ func TestListPodNodes(t *testing.T) {
 func TestGetNode(t *testing.T) {
 	c := NewTestCluster()
 	ctx := context.Background()
+
+	// fail by validating
+	_, err := c.GetNode(ctx, "")
+	assert.Error(t, err)
+
 	name := "test"
 	node := &types.Node{
-		Name: name,
+		NodeMeta: types.NodeMeta{Name: name},
 	}
 
 	store := &storemocks.Store{}
 	store.On("GetNode", mock.Anything, mock.Anything).Return(node, nil)
 	c.store = store
 
-	n, err := c.GetNode(ctx, "")
+	n, err := c.GetNode(ctx, name)
 	assert.NoError(t, err)
 	assert.Equal(t, n.Name, name)
 }
@@ -104,19 +129,23 @@ func TestSetNode(t *testing.T) {
 	c := NewTestCluster()
 	ctx := context.Background()
 	name := "test"
-	node := &types.Node{Name: name}
+	node := &types.Node{NodeMeta: types.NodeMeta{Name: name}}
 	node.Init()
 
 	store := &storemocks.Store{}
 	c.store = store
 	lock := &lockmocks.DistributedLock{}
 	store.On("CreateLock", mock.Anything, mock.Anything).Return(lock, nil)
-	lock.On("Lock", mock.Anything).Return(nil)
+	lock.On("Lock", mock.Anything).Return(context.TODO(), nil)
 	lock.On("Unlock", mock.Anything).Return(nil)
+
+	// fail by validating
+	_, err := c.SetNode(ctx, &types.SetNodeOptions{Nodename: ""})
+	assert.Error(t, err)
 	// failed by get node
 	store.On("GetNode", mock.Anything, mock.Anything).Return(nil, types.ErrCannotGetEngine).Once()
 	store.On("GetNodesByPod", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*types.Node{node}, nil)
-	_, err := c.SetNode(ctx, &types.SetNodeOptions{})
+	_, err = c.SetNode(ctx, &types.SetNodeOptions{Nodename: "xxxx"})
 	assert.Error(t, err)
 	store.On("GetNode", mock.Anything, mock.Anything).Return(node, nil)
 	// failed by no node name

@@ -12,8 +12,8 @@ import (
 	"strings"
 
 	"github.com/projecteru2/core/cluster"
+	"github.com/projecteru2/core/log"
 	"github.com/projecteru2/core/types"
-	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -207,6 +207,17 @@ func Min(x int, xs ...int) int {
 		return x
 	}
 	if m := Min(xs[0], xs[1:]...); m < x {
+		return m
+	}
+	return x
+}
+
+// Min64 return lesser one
+func Min64(x int64, xs ...int64) int64 {
+	if len(xs) == 0 {
+		return x
+	}
+	if m := Min64(xs[0], xs[1:]...); m < x {
 		return m
 	}
 	return x

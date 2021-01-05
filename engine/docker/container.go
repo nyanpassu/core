@@ -16,7 +16,7 @@ import (
 	"github.com/docker/go-units"
 	"github.com/pkg/errors"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/projecteru2/core/log"
 
 	dockertypes "github.com/docker/docker/api/types"
 	dockercontainer "github.com/docker/docker/api/types/container"
@@ -59,10 +59,13 @@ func (e *Engine) VirtualizationCreate(ctx context.Context, opts *enginetypes.Vir
 	if opts.RestartPolicy == restartAlways {
 		restartRetryCount = 0
 	}
+	// no longer use opts.Network as networkmode
+	// always get network name from networks
+	// -----------------------------------------
 	// network mode 和 networks 互斥
 	// 没有 networks 的时候用 networkmode 的值
 	// 有 networks 的时候一律用用 networks 的值作为 mode
-	networkMode := dockercontainer.NetworkMode(opts.Network)
+	var networkMode dockercontainer.NetworkMode
 	for name := range opts.Networks {
 		networkMode = dockercontainer.NetworkMode(name)
 		if networkMode.IsHost() {
@@ -206,7 +209,7 @@ func (e *Engine) VirtualizationCreate(ctx context.Context, opts *enginetypes.Vir
 		log.Infof("[ConnectToNetwork] Connect to %v with IP %v", networkID, ipForShow)
 	}
 
-	workloadCreated, err := e.client.ContainerCreate(ctx, config, hostConfig, networkConfig, opts.Name)
+	workloadCreated, err := e.client.ContainerCreate(ctx, config, hostConfig, networkConfig, nil, opts.Name)
 	r.Name = opts.Name
 	r.ID = workloadCreated.ID
 	return r, err
@@ -268,7 +271,14 @@ func (e *Engine) VirtualizationInspect(ctx context.Context, ID string) (*enginet
 
 // VirtualizationLogs show virtualization logs
 func (e *Engine) VirtualizationLogs(ctx context.Context, opts *enginetypes.VirtualizationLogStreamOptions) (io.ReadCloser, error) {
-	logsOpts := dockertypes.ContainerLogsOptions{Follow: opts.Follow, ShowStdout: opts.Stdout, ShowStderr: opts.Stderr, Tail: opts.Tail}
+	logsOpts := dockertypes.ContainerLogsOptions{
+		ShowStdout: opts.Stdout,
+		ShowStderr: opts.Stderr,
+		Tail:       opts.Tail,
+		Follow:     opts.Follow,
+		Since:      opts.Since,
+		Until:      opts.Until,
+	}
 	resp, err := e.client.ContainerLogs(ctx, opts.ID, logsOpts)
 	if err != nil {
 		return nil, err

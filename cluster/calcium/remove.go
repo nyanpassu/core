@@ -8,8 +8,8 @@ import (
 	"github.com/projecteru2/core/store"
 	"github.com/projecteru2/core/utils"
 
+	"github.com/projecteru2/core/log"
 	"github.com/projecteru2/core/types"
-	log "github.com/sirupsen/logrus"
 )
 
 // RemoveWorkload remove workloads
@@ -29,8 +29,8 @@ func (c *Calcium) RemoveWorkload(ctx context.Context, IDs []string, force bool, 
 			go func(ID string) {
 				defer wg.Done()
 				ret := &types.RemoveWorkloadMessage{WorkloadID: ID, Success: false, Hook: []*bytes.Buffer{}}
-				if err := c.withWorkloadLocked(ctx, ID, func(workload *types.Workload) error {
-					return c.withNodeLocked(ctx, workload.Nodename, func(node *types.Node) (err error) {
+				if err := c.withWorkloadLocked(ctx, ID, func(ctx context.Context, workload *types.Workload) error {
+					return c.withNodeLocked(ctx, workload.Nodename, func(ctx context.Context, node *types.Node) (err error) {
 						return utils.Txn(
 							ctx,
 							// if

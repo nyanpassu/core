@@ -8,6 +8,7 @@ import (
 	enginemocks "github.com/projecteru2/core/engine/mocks"
 	enginetypes "github.com/projecteru2/core/engine/types"
 	lockmocks "github.com/projecteru2/core/lock/mocks"
+	resourcetypes "github.com/projecteru2/core/resources/types"
 	"github.com/projecteru2/core/scheduler"
 	schedulermocks "github.com/projecteru2/core/scheduler/mocks"
 	storemocks "github.com/projecteru2/core/store/mocks"
@@ -20,23 +21,46 @@ import (
 func TestCreateWorkload(t *testing.T) {
 	c := NewTestCluster()
 	ctx := context.Background()
-	opts := &types.DeployOptions{}
+	opts := &types.DeployOptions{
+		Name:    "deployname",
+		Podname: "somepod",
+		Image:   "image:todeploy",
+		Count:   1,
+		Entrypoint: &types.Entrypoint{
+			Name: "some-nice-entrypoint",
+		},
+	}
 	store := c.store.(*storemocks.Store)
 
 	store.On("SaveProcessing", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	store.On("UpdateProcessing", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	store.On("DeleteProcessing", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	// failed by GetPod
-	store.On("GetPod", mock.Anything, mock.Anything).Return(nil, types.ErrNoETCD).Once()
+	// failed by validating
+	opts.Name = ""
 	_, err := c.CreateWorkload(ctx, opts)
 	assert.Error(t, err)
-	store.On("GetPod", mock.Anything, mock.Anything).Return(&types.Pod{Name: "test"}, nil)
-	// failed by count
+	opts.Name = "deployname"
+
+	opts.Podname = ""
+	_, err = c.CreateWorkload(ctx, opts)
+	assert.Error(t, err)
+	opts.Podname = "somepod"
+
+	opts.Image = ""
+	_, err = c.CreateWorkload(ctx, opts)
+	assert.Error(t, err)
+	opts.Image = "image:todeploy"
+
 	opts.Count = 0
 	_, err = c.CreateWorkload(ctx, opts)
 	assert.Error(t, err)
 	opts.Count = 1
+
+	opts.Entrypoint.Name = "bad_entry_name"
+	_, err = c.CreateWorkload(ctx, opts)
+	assert.Error(t, err)
+	opts.Entrypoint.Name = "some-nice-entrypoint"
 
 	// failed by memory check
 	opts.ResourceOpts = types.ResourceOptions{MemoryLimit: -1}
@@ -60,12 +84,15 @@ func TestCreateWorkloadTxn(t *testing.T) {
 	c := NewTestCluster()
 	ctx := context.Background()
 	opts := &types.DeployOptions{
+		Name:           "zc:name",
 		Count:          2,
 		DeployStrategy: strategy.Auto,
 		Podname:        "p1",
 		ResourceOpts:   types.ResourceOptions{CPUQuotaLimit: 1},
 		Image:          "zc:test",
-		Entrypoint:     &types.Entrypoint{},
+		Entrypoint: &types.Entrypoint{
+			Name: "good-entrypoint",
+		},
 	}
 	store := &storemocks.Store{}
 	sche := &schedulermocks.Scheduler{}
@@ -76,11 +103,15 @@ func TestCreateWorkloadTxn(t *testing.T) {
 
 	pod1 := &types.Pod{Name: "p1"}
 	node1 := &types.Node{
-		Name:   "n1",
+		NodeMeta: types.NodeMeta{
+			Name: "n1",
+		},
 		Engine: engine,
 	}
 	node2 := &types.Node{
-		Name:   "n2",
+		NodeMeta: types.NodeMeta{
+			Name: "n2",
+		},
 		Engine: engine,
 	}
 	nodes := []*types.Node{node1, node2}
@@ -91,13 +122,13 @@ func TestCreateWorkloadTxn(t *testing.T) {
 
 	// doAllocResource fails: MakeDeployStatus
 	lock := &lockmocks.DistributedLock{}
-	lock.On("Lock", mock.Anything).Return(nil)
+	lock.On("Lock", mock.Anything).Return(context.Background(), nil)
 	lock.On("Unlock", mock.Anything).Return(nil)
 	store.On("CreateLock", mock.Anything, mock.Anything).Return(lock, nil)
 	store.On("GetPod", mock.Anything, mock.Anything).Return(pod1, nil)
 	store.On("GetNodesByPod", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nodes, nil)
 	store.On("GetNode",
-		mock.AnythingOfType("*context.timerCtx"),
+		mock.AnythingOfType("*context.emptyCtx"),
 		mock.AnythingOfType("string"),
 	).Return(
 		func(_ context.Context, name string) (node *types.Node) {
@@ -107,18 +138,21 @@ func TestCreateWorkloadTxn(t *testing.T) {
 			}
 			return
 		}, nil)
-	sche.On("SelectStorageNodes", mock.AnythingOfType("[]types.NodeInfo"), mock.AnythingOfType("int64")).Return(func(nodesInfo []types.NodeInfo, _ int64) []types.NodeInfo {
-		return nodesInfo
+	sche.On("SelectStorageNodes", mock.AnythingOfType("[]resourcetypes.ScheduleInfo"), mock.AnythingOfType("int64")).Return(func(scheduleInfos []resourcetypes.ScheduleInfo, _ int64) []resourcetypes.ScheduleInfo {
+		return scheduleInfos
 	}, len(nodes), nil)
-	sche.On("SelectVolumeNodes", mock.AnythingOfType("[]types.NodeInfo"), mock.AnythingOfType("types.VolumeBindings")).Return(func(nodesInfo []types.NodeInfo, _ types.VolumeBindings) []types.NodeInfo {
-		return nodesInfo
+	sche.On("SelectStorageNodes", mock.AnythingOfType("[]types.ScheduleInfo"), mock.AnythingOfType("int64")).Return(func(scheduleInfos []resourcetypes.ScheduleInfo, _ int64) []resourcetypes.ScheduleInfo {
+		return scheduleInfos
+	}, len(nodes), nil)
+	sche.On("SelectVolumeNodes", mock.AnythingOfType("[]types.ScheduleInfo"), mock.AnythingOfType("types.VolumeBindings")).Return(func(scheduleInfos []resourcetypes.ScheduleInfo, _ types.VolumeBindings) []resourcetypes.ScheduleInfo {
+		return scheduleInfos
 	}, nil, len(nodes), nil)
-	sche.On("SelectMemoryNodes", mock.AnythingOfType("[]types.NodeInfo"), mock.AnythingOfType("float64"), mock.AnythingOfType("int64")).Return(
-		func(nodesInfo []types.NodeInfo, _ float64, _ int64) []types.NodeInfo {
-			for i := range nodesInfo {
-				nodesInfo[i].Capacity = 1
+	sche.On("SelectMemoryNodes", mock.AnythingOfType("[]types.ScheduleInfo"), mock.AnythingOfType("float64"), mock.AnythingOfType("int64")).Return(
+		func(scheduleInfos []resourcetypes.ScheduleInfo, _ float64, _ int64) []resourcetypes.ScheduleInfo {
+			for i := range scheduleInfos {
+				scheduleInfos[i].Capacity = 1
 			}
-			return nodesInfo
+			return scheduleInfos
 		}, len(nodes), nil)
 	store.On("MakeDeployStatus", mock.Anything, mock.Anything, mock.Anything).Return(
 		errors.Wrap(context.DeadlineExceeded, "MakeDeployStatus"),

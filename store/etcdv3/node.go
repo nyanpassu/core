@@ -11,10 +11,10 @@ import (
 	"github.com/projecteru2/core/store"
 
 	enginefactory "github.com/projecteru2/core/engine/factory"
+	"github.com/projecteru2/core/log"
 	"github.com/projecteru2/core/metrics"
 	"github.com/projecteru2/core/types"
 	"github.com/projecteru2/core/utils"
-	log "github.com/sirupsen/logrus"
 	"go.etcd.io/etcd/clientv3"
 	"go.etcd.io/etcd/mvcc/mvccpb"
 )
@@ -215,22 +215,24 @@ func (m *Mercury) doAddNode(ctx context.Context, name, endpoint, podname, ca, ce
 	}
 
 	node := &types.Node{
-		Name:           name,
-		Endpoint:       endpoint,
-		Podname:        podname,
-		CPU:            cpumap,
-		MemCap:         memory,
-		StorageCap:     storage,
-		Volume:         volumemap,
-		InitCPU:        cpumap,
-		InitMemCap:     memory,
-		InitStorageCap: storage,
-		InitNUMAMemory: numaMemory,
-		InitVolume:     volumemap,
-		Available:      true,
-		Labels:         labels,
-		NUMA:           numa,
-		NUMAMemory:     numaMemory,
+		NodeMeta: types.NodeMeta{
+			Name:           name,
+			Endpoint:       endpoint,
+			Podname:        podname,
+			CPU:            cpumap,
+			MemCap:         memory,
+			StorageCap:     storage,
+			Volume:         volumemap,
+			InitCPU:        cpumap,
+			InitMemCap:     memory,
+			InitStorageCap: storage,
+			InitNUMAMemory: numaMemory,
+			InitVolume:     volumemap,
+			Labels:         labels,
+			NUMA:           numa,
+			NUMAMemory:     numaMemory,
+		},
+		Available: true,
 	}
 
 	bytes, err := json.Marshal(node)

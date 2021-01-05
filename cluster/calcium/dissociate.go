@@ -3,10 +3,10 @@ package calcium
 import (
 	"context"
 
+	"github.com/projecteru2/core/log"
 	"github.com/projecteru2/core/store"
 	"github.com/projecteru2/core/types"
 	"github.com/projecteru2/core/utils"
-	log "github.com/sirupsen/logrus"
 )
 
 // DissociateWorkload dissociate workload from eru, return it resource but not modity it
@@ -15,8 +15,8 @@ func (c *Calcium) DissociateWorkload(ctx context.Context, IDs []string) (chan *t
 	go func() {
 		defer close(ch)
 		for _, ID := range IDs {
-			err := c.withWorkloadLocked(ctx, ID, func(workload *types.Workload) error {
-				return c.withNodeLocked(ctx, workload.Nodename, func(node *types.Node) (err error) {
+			err := c.withWorkloadLocked(ctx, ID, func(ctx context.Context, workload *types.Workload) error {
+				return c.withNodeLocked(ctx, workload.Nodename, func(ctx context.Context, node *types.Node) (err error) {
 					return utils.Txn(
 						ctx,
 						// if

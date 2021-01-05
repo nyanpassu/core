@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/projecteru2/core/client/servicediscovery"
+	"github.com/projecteru2/core/log"
 	"github.com/projecteru2/core/types"
-	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/resolver"
 )
 
@@ -43,7 +43,7 @@ func (r *Resolver) Close() {
 }
 
 func (r *Resolver) sync() {
-	log.Info("[EruResolver] start sync service discovery")
+	log.Debug("[EruResolver] start sync service discovery")
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel = cancel
 	defer cancel()

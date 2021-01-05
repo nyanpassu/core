@@ -6,18 +6,19 @@ import (
 	"net/http"
 	_ "net/http/pprof" // nolint
 	"os"
-	"os/signal"
-	"syscall"
+	"time"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/projecteru2/core/auth"
 	"github.com/projecteru2/core/cluster/calcium"
+	"github.com/projecteru2/core/log"
 	"github.com/projecteru2/core/metrics"
 	"github.com/projecteru2/core/rpc"
 	pb "github.com/projecteru2/core/rpc/gen"
 	"github.com/projecteru2/core/utils"
-	"github.com/projecteru2/core/versioninfo"
+	"github.com/projecteru2/core/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	log "github.com/sirupsen/logrus"
+	"github.com/sethvargo/go-signalcontext"
 	cli "github.com/urfave/cli/v2"
 	"google.golang.org/grpc"
 
@@ -29,20 +30,22 @@ var (
 	embeddedStorage bool
 )
 
-func setupLog(l string) error {
-	level, err := log.ParseLevel(l)
-	if err != nil {
-		return err
+func setupSentry(dsn string) (func(), error) {
+	if dsn == "" {
+		return nil, nil
 	}
-	log.SetLevel(level)
 
-	formatter := &log.TextFormatter{
-		TimestampFormat: "2006-01-02 15:04:05",
-		FullTimestamp:   true,
+	sentryDefer := func() {
+		defer sentry.Flush(2 * time.Second)
+		err := recover()
+		if err != nil {
+			sentry.CaptureMessage(fmt.Sprintf("%+v", err))
+			panic(err)
+		}
 	}
-	log.SetFormatter(formatter)
-	log.SetOutput(os.Stdout)
-	return nil
+	return sentryDefer, sentry.Init(sentry.ClientOptions{
+		Dsn: dsn,
+	})
 }
 
 func serve(c *cli.Context) error {
@@ -51,17 +54,25 @@ func serve(c *cli.Context) error {
 		log.Fatalf("[main] %v", err)
 	}
 
-	if err := setupLog(config.LogLevel); err != nil {
+	if err := log.SetupLog(config.LogLevel); err != nil {
 		log.Fatalf("[main] %v", err)
 	}
 
+	if sentryDefer, err := setupSentry(config.SentryDSN); err != nil {
+		log.Warnf("[main] sentry %v", err)
+	} else if sentryDefer != nil {
+		defer sentryDefer()
+	}
+
 	if err := metrics.InitMetrics(config); err != nil {
-		log.Fatalf("[main] %v", err)
+		log.Errorf("[main] %v", err)
+		return err
 	}
 
 	cluster, err := calcium.New(config, embeddedStorage)
 	if err != nil {
-		log.Fatalf("[main] %v", err)
+		log.Errorf("[main] %v", err)
+		return err
 	}
 	defer cluster.Finalizer()
 
@@ -111,10 +122,11 @@ func serve(c *cli.Context) error {
 	log.Info("[main] Cluster started successfully.")
 
 	// wait for unix signals and try to GracefulStop
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM)
-	sig := <-sigs
-	log.Infof("[main] Get signal %v.", sig)
+	ctx, cancel := signalcontext.OnInterrupt()
+	defer cancel()
+	<-ctx.Done()
+
+	log.Info("[main] Interrupt by signal")
 	close(rpcch)
 	unregisterService()
 	grpcServer.GracefulStop()
@@ -128,13 +140,13 @@ func serve(c *cli.Context) error {
 
 func main() {
 	cli.VersionPrinter = func(c *cli.Context) {
-		fmt.Print(versioninfo.VersionString())
+		fmt.Print(version.String())
 	}
 
 	app := cli.NewApp()
-	app.Name = versioninfo.NAME
+	app.Name = version.NAME
 	app.Usage = "Run eru core"
-	app.Version = versioninfo.VERSION
+	app.Version = version.VERSION
 	app.Flags = []cli.Flag{
 		&cli.StringFlag{
 			Name:        "config",

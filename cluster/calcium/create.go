@@ -12,14 +12,18 @@ import (
 	"github.com/projecteru2/core/metrics"
 	resourcetypes "github.com/projecteru2/core/resources/types"
 
+	"github.com/projecteru2/core/log"
 	"github.com/projecteru2/core/types"
 	"github.com/projecteru2/core/utils"
 	"github.com/sanity-io/litter"
-	log "github.com/sirupsen/logrus"
 )
 
 // CreateWorkload use options to create workloads
 func (c *Calcium) CreateWorkload(ctx context.Context, opts *types.DeployOptions) (chan *types.CreateWorkloadMessage, error) {
+	if err := opts.Validate(); err != nil {
+		return nil, err
+	}
+
 	opts.ProcessIdent = utils.RandomString(16)
 	log.Infof("[CreateWorkload %s] Creating workload with options:", opts.ProcessIdent)
 	litter.Dump(opts)
@@ -62,7 +66,7 @@ func (c *Calcium) doCreateWorkloads(ctx context.Context, opts *types.DeployOptio
 
 			// if: alloc resources
 			func(ctx context.Context) error {
-				return c.withNodesLocked(ctx, opts.Podname, opts.Nodenames, opts.NodeLabels, false, func(nodeMap map[string]*types.Node) (err error) {
+				return c.withNodesLocked(ctx, opts.Podname, opts.Nodenames, opts.NodeLabels, false, func(ctx context.Context, nodeMap map[string]*types.Node) (err error) {
 					defer func() {
 						if err != nil {
 							ch <- &types.CreateWorkloadMessage{Error: err}
@@ -98,7 +102,7 @@ func (c *Calcium) doCreateWorkloads(ctx context.Context, opts *types.DeployOptio
 			// rollback: give back resources
 			func(ctx context.Context, _ bool) (err error) {
 				for nodename, rollbackIndices := range rollbackMap {
-					if e := c.withNodeLocked(ctx, nodename, func(node *types.Node) error {
+					if e := c.withNodeLocked(ctx, nodename, func(ctx context.Context, node *types.Node) error {
 						for _, plan := range plans {
 							plan.RollbackChangesOnNode(node, rollbackIndices...) // nolint:scopelint
 						}
@@ -116,7 +120,7 @@ func (c *Calcium) doCreateWorkloads(ctx context.Context, opts *types.DeployOptio
 		}
 	}()
 
-	return ch, err
+	return ch, errors.WithStack(err)
 }
 
 func (c *Calcium) doDeployWorkloads(ctx context.Context, ch chan *types.CreateWorkloadMessage, opts *types.DeployOptions, plans []resourcetypes.ResourcePlans, deployMap map[string]int) (_ map[string][]int, err error) {
@@ -180,7 +184,8 @@ func (c *Calcium) doDeployWorkloadsOnNode(ctx context.Context, ch chan *types.Cr
 			}
 
 			createMsg.ResourceMeta = *r
-			return c.doDeployOneWorkload(ctx, node, opts, createMsg, seq+idx, deploy-1-idx)
+			createOpts := c.doMakeWorkloadOptions(seq+idx, createMsg, opts, node)
+			return c.doDeployOneWorkload(ctx, node, opts, createMsg, createOpts, deploy-1-idx)
 		}
 		_ = do(idx)
 	}
@@ -203,9 +208,9 @@ func (c *Calcium) doDeployOneWorkload(
 	node *types.Node,
 	opts *types.DeployOptions,
 	msg *types.CreateWorkloadMessage,
-	no, processingCount int,
+	config *enginetypes.VirtualizationCreateOptions,
+	processingCount int,
 ) (err error) {
-	config := c.doMakeWorkloadOptions(no, msg, opts, node)
 	workload := &types.Workload{
 		ResourceMeta: types.ResourceMeta{
 			CPU:               msg.CPU,
@@ -252,7 +257,7 @@ func (c *Calcium) doDeployOneWorkload(
 					if err != nil {
 						return errors.WithStack(err)
 					}
-					if err = c.doSendFileToWorkload(ctx, node.Engine, workload.ID, dst, reader, true, true); err != nil {
+					if err = c.doSendFileToWorkload(ctx, node.Engine, workload.ID, dst, reader, true, false); err != nil {
 						return errors.WithStack(err)
 					}
 				}
@@ -330,7 +335,6 @@ func (c *Calcium) doMakeWorkloadOptions(no int, msg *types.CreateWorkloadMessage
 	config.Volumes = msg.VolumeLimit.ApplyPlan(msg.VolumePlanLimit).ToStringSlice(false, true)
 	config.VolumePlan = msg.VolumePlanLimit.ToLiteral()
 	config.Debug = opts.Debug
-	config.Network = opts.NetworkMode
 	config.Networks = opts.Networks
 
 	// entry

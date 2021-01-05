@@ -33,7 +33,6 @@ type VirtualizationCreateOptions struct {
 
 	RestartPolicy string
 
-	Network  string
 	Networks map[string]string
 
 	Volumes []string
@@ -43,6 +42,8 @@ type VirtualizationCreateOptions struct {
 
 	RawArgs []byte
 	Lambda  bool
+
+	AncestorWorkloadID string
 }
 
 // VirtualizationCreated use for store name and ID

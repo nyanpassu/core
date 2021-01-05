@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
+	"github.com/projecteru2/core/log"
 
 	resourcetypes "github.com/projecteru2/core/resources/types"
 	"github.com/projecteru2/core/strategy"
@@ -35,6 +35,10 @@ func (c *Calcium) PodResource(ctx context.Context, podname string) (*types.PodRe
 
 // NodeResource check node's workload and resource
 func (c *Calcium) NodeResource(ctx context.Context, nodename string, fix bool) (*types.NodeResource, error) {
+	if nodename == "" {
+		return nil, types.ErrEmptyNodeName
+	}
+
 	nr, err := c.doGetNodeResource(ctx, nodename, fix)
 	if err != nil {
 		return nil, err
@@ -50,7 +54,7 @@ func (c *Calcium) NodeResource(ctx context.Context, nodename string, fix bool) (
 
 func (c *Calcium) doGetNodeResource(ctx context.Context, nodename string, fix bool) (*types.NodeResource, error) {
 	var nr *types.NodeResource
-	return nr, c.withNodeLocked(ctx, nodename, func(node *types.Node) error {
+	return nr, c.withNodeLocked(ctx, nodename, func(ctx context.Context, node *types.Node) error {
 		workloads, err := c.ListNodeWorkloads(ctx, node.Name, nil)
 		if err != nil {
 			return err

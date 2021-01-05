@@ -7,21 +7,22 @@ import (
 	"fmt"
 	"sync"
 
+	enginetypes "github.com/projecteru2/core/engine/types"
+	"github.com/projecteru2/core/log"
 	"github.com/projecteru2/core/types"
 	"github.com/projecteru2/core/utils"
-	log "github.com/sirupsen/logrus"
 )
 
 // ReplaceWorkload replace workloads with same resource
 func (c *Calcium) ReplaceWorkload(ctx context.Context, opts *types.ReplaceOptions) (chan *types.ReplaceWorkloadMessage, error) {
-	if opts.Count == 0 {
-		opts.Count = 1
+	if err := opts.Validate(); err != nil {
+		return nil, err
 	}
+	opts.Normalize()
 	if len(opts.IDs) == 0 {
 		if len(opts.Nodenames) == 0 {
 			opts.Nodenames = []string{""}
 		}
-		oldWorkloads := []*types.Workload{}
 		for _, nodename := range opts.Nodenames {
 			workloads, err := c.ListWorkloads(ctx, &types.ListWorkloadsOptions{
 				Appname: opts.Name, Entrypoint: opts.Entrypoint.Name, Nodename: nodename,
@@ -29,10 +30,9 @@ func (c *Calcium) ReplaceWorkload(ctx context.Context, opts *types.ReplaceOption
 			if err != nil {
 				return nil, err
 			}
-			oldWorkloads = append(oldWorkloads, workloads...)
-		}
-		for _, workload := range oldWorkloads {
-			opts.IDs = append(opts.IDs, workload.ID)
+			for _, workload := range workloads {
+				opts.IDs = append(opts.IDs, workload.ID)
+			}
 		}
 	}
 	ch := make(chan *types.ReplaceWorkloadMessage)
@@ -41,14 +41,14 @@ func (c *Calcium) ReplaceWorkload(ctx context.Context, opts *types.ReplaceOption
 		// 并发控制
 		wg := sync.WaitGroup{}
 		defer wg.Wait()
-		for index, ID := range opts.IDs {
+		for index, id := range opts.IDs {
 			wg.Add(1)
-			go func(replaceOpts types.ReplaceOptions, index int, ID string) {
+			go func(replaceOpts types.ReplaceOptions, index int, id string) {
 				defer wg.Done()
 				var createMessage *types.CreateWorkloadMessage
-				removeMessage := &types.RemoveWorkloadMessage{WorkloadID: ID}
+				removeMessage := &types.RemoveWorkloadMessage{WorkloadID: id}
 				var err error
-				if err = c.withWorkloadLocked(ctx, ID, func(workload *types.Workload) error {
+				if err = c.withWorkloadLocked(ctx, id, func(ctx context.Context, workload *types.Workload) error {
 					if opts.Podname != "" && workload.Podname != opts.Podname {
 						log.Warnf("[ReplaceWorkload] Skip not in pod workload %s", workload.ID)
 						return types.NewDetailedErr(types.ErrIgnoreWorkload,
@@ -81,7 +81,6 @@ func (c *Calcium) ReplaceWorkload(ctx context.Context, opts *types.ReplaceOption
 								fmt.Sprintf("workload %s is not running, can not inherit", workload.ID),
 							)
 						}
-						replaceOpts.NetworkMode = ""
 						replaceOpts.Networks = info.Networks
 						log.Infof("[ReplaceWorkload] Inherit old workload network configuration mode %v", replaceOpts.Networks)
 					}
@@ -93,11 +92,11 @@ func (c *Calcium) ReplaceWorkload(ctx context.Context, opts *types.ReplaceOption
 					}
 					log.Errorf("[ReplaceWorkload] Replace and remove failed %v, old workload restarted", err)
 				} else {
-					log.Infof("[ReplaceWorkload] Replace and remove success %s", ID)
+					log.Infof("[ReplaceWorkload] Replace and remove success %s", id)
 					log.Infof("[ReplaceWorkload] New workload %s", createMessage.WorkloadID)
 				}
 				ch <- &types.ReplaceWorkloadMessage{Create: createMessage, Remove: removeMessage, Error: err}
-			}(*opts, index, ID) // 传 opts 的值，产生一次复制
+			}(*opts, index, id) // 传 opts 的值，产生一次复制
 			if (index+1)%opts.Count == 0 {
 				wg.Wait()
 			}
@@ -165,7 +164,8 @@ func (c *Calcium) doReplaceWorkload(
 				ctx,
 				// if
 				func(ctx context.Context) error {
-					return c.doDeployOneWorkload(ctx, node, &opts.DeployOptions, createMessage, index, -1)
+					vco := c.doMakeReplaceWorkloadOptions(index, createMessage, &opts.DeployOptions, node, workload.ID)
+					return c.doDeployOneWorkload(ctx, node, &opts.DeployOptions, createMessage, vco, -1)
 				},
 				// then
 				func(ctx context.Context) (err error) {
@@ -193,4 +193,10 @@ func (c *Calcium) doReplaceWorkload(
 		},
 		c.config.GlobalTimeout,
 	)
+}
+
+func (c *Calcium) doMakeReplaceWorkloadOptions(no int, msg *types.CreateWorkloadMessage, opts *types.DeployOptions, node *types.Node, ancestorWorkloadID string) *enginetypes.VirtualizationCreateOptions {
+	vco := c.doMakeWorkloadOptions(no, msg, opts, node)
+	vco.AncestorWorkloadID = ancestorWorkloadID
+	return vco
 }

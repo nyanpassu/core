@@ -14,6 +14,10 @@ import (
 func TestAddPod(t *testing.T) {
 	c := NewTestCluster()
 	ctx := context.Background()
+
+	_, err := c.AddPod(ctx, "", "")
+	assert.Error(t, err)
+
 	name := "test"
 	pod := &types.Pod{
 		Name: name,
@@ -23,7 +27,7 @@ func TestAddPod(t *testing.T) {
 	store.On("AddPod", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(pod, nil)
 	c.store = store
 
-	p, err := c.AddPod(ctx, "", "")
+	p, err := c.AddPod(ctx, name, "")
 	assert.NoError(t, err)
 	assert.Equal(t, p.Name, name)
 }
@@ -31,18 +35,21 @@ func TestAddPod(t *testing.T) {
 func TestRemovePod(t *testing.T) {
 	c := NewTestCluster()
 	ctx := context.Background()
+
+	assert.Error(t, c.RemovePod(ctx, ""))
+
 	store := &storemocks.Store{}
 	c.store = store
 	store.On("RemovePod", mock.Anything, mock.Anything).Return(nil)
-	node := &types.Node{Name: "n1", Available: true}
+	node := &types.Node{NodeMeta: types.NodeMeta{Name: "n1"}, Available: true}
 	store.On("GetNodesByPod", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*types.Node{node}, nil)
 	store.On("GetNode", mock.Anything, mock.Anything).Return(node, nil)
 	lock := &lockmocks.DistributedLock{}
-	lock.On("Lock", mock.Anything).Return(nil)
+	lock.On("Lock", mock.Anything).Return(context.TODO(), nil)
 	lock.On("Unlock", mock.Anything).Return(nil)
 	store.On("CreateLock", mock.Anything, mock.Anything).Return(lock, nil)
 	c.store = store
-	assert.NoError(t, c.RemovePod(ctx, ""))
+	assert.NoError(t, c.RemovePod(ctx, "podname"))
 }
 
 func TestListPods(t *testing.T) {
@@ -67,13 +74,16 @@ func TestGetPod(t *testing.T) {
 	c := NewTestCluster()
 	ctx := context.Background()
 
+	_, err := c.GetPod(ctx, "")
+	assert.Error(t, err)
+
 	name := "test"
 	pod := &types.Pod{Name: name}
 	store := &storemocks.Store{}
 	store.On("GetPod", mock.Anything, mock.Anything).Return(pod, nil)
 	c.store = store
 
-	p, err := c.GetPod(ctx, "")
+	p, err := c.GetPod(ctx, name)
 	assert.NoError(t, err)
 	assert.Equal(t, p.Name, name)
 }

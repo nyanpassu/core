@@ -6,10 +6,10 @@ import (
 	"time"
 
 	enginetypes "github.com/projecteru2/core/engine/types"
+	"github.com/projecteru2/core/log"
 	pb "github.com/projecteru2/core/rpc/gen"
 	"github.com/projecteru2/core/types"
 	"github.com/projecteru2/core/utils"
-	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 )
 
@@ -49,8 +49,6 @@ func toRPCNetwork(n *enginetypes.Network) *pb.Network {
 
 func toRPCNode(ctx context.Context, n *types.Node) *pb.Node {
 	var nodeInfo string
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
 	if info, err := n.Info(ctx); err == nil {
 		bytes, _ := json.Marshal(info)
 		nodeInfo = string(bytes)
@@ -228,12 +226,11 @@ func toCoreReplaceOptions(r *pb.ReplaceOptions) (*types.ReplaceOptions, error) {
 }
 
 func toCoreDeployOptions(d *pb.DeployOptions) (*types.DeployOptions, error) {
-	if d.Entrypoint == nil {
+	if d.Entrypoint == nil || d.Entrypoint.Name == "" {
 		return nil, types.ErrNoEntryInSpec
 	}
 
 	entrypoint := d.Entrypoint
-
 	entry := &types.Entrypoint{
 		Name:          entrypoint.Name,
 		Command:       entrypoint.Command,
@@ -292,8 +289,8 @@ func toCoreDeployOptions(d *pb.DeployOptions) (*types.DeployOptions, error) {
 			MemoryLimit:     d.ResourceOpts.MemoryLimit,
 			VolumeRequest:   vbsRequest,
 			VolumeLimit:     vbsLimit,
-			StorageRequest:  d.ResourceOpts.StorageRequest,
-			StorageLimit:    d.ResourceOpts.StorageLimit,
+			StorageRequest:  d.ResourceOpts.StorageRequest + vbsRequest.TotalSize(),
+			StorageLimit:    d.ResourceOpts.StorageLimit + vbsLimit.TotalSize(),
 		},
 		Name:           d.Name,
 		Entrypoint:     entry,
@@ -306,7 +303,6 @@ func toCoreDeployOptions(d *pb.DeployOptions) (*types.DeployOptions, error) {
 		DNS:            d.Dns,
 		ExtraHosts:     d.ExtraHosts,
 		Networks:       d.Networks,
-		NetworkMode:    d.Networkmode,
 		User:           d.User,
 		Debug:          d.Debug,
 		OpenStdin:      d.OpenStdin,
@@ -541,5 +537,24 @@ func toRPCCapacityMessage(msg *types.CapacityMessage) *pb.CapacityMessage {
 	return &pb.CapacityMessage{
 		Total:          int64(msg.Total),
 		NodeCapacities: caps,
+	}
+}
+
+func toCoreCacheImageOptions(opts *pb.CacheImageOptions) *types.ImageOptions {
+	return &types.ImageOptions{
+		Podname:   opts.Podname,
+		Nodenames: opts.Nodenames,
+		Images:    opts.Images,
+		Step:      int(opts.Step),
+	}
+}
+
+func toCoreRemoveImageOptions(opts *pb.RemoveImageOptions) *types.ImageOptions {
+	return &types.ImageOptions{
+		Podname:   opts.Podname,
+		Nodenames: opts.Nodenames,
+		Images:    opts.Images,
+		Step:      int(opts.Step),
+		Prune:     opts.Prune,
 	}
 }

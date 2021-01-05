@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"path/filepath"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/projecteru2/core/log"
 
 	virtapi "github.com/projecteru2/libyavirt/client"
 	virttypes "github.com/projecteru2/libyavirt/types"
@@ -104,10 +105,7 @@ func (v *Virt) ExecExitCode(ctx context.Context, execID string) (code int, err e
 
 // ExecResize resize exec tty
 func (v *Virt) ExecResize(ctx context.Context, execID string, height, width uint) (err error) {
-	resizeCmd := fmt.Sprintf("yaexec resize -r %d -c %d", height, width)
-	msg, err := v.client.ExecuteGuest(ctx, execID, strings.Split(resizeCmd, " "))
-	log.Debugf("[ExecResize] resize got response: %v", msg)
-	return err
+	return v.client.ResizeConsoleWindow(ctx, execID, height, width)
 }
 
 // NetworkConnect connects to a network.
@@ -163,21 +161,13 @@ func (v *Virt) VirtualizationCreate(ctx context.Context, opts *enginetypes.Virtu
 		return nil, err
 	}
 
-	stor := MinVirtStorage
-	for _, cap := range vols {
-		stor += cap
-	}
-	if opts.Storage < stor {
-		return nil, coretypes.NewDetailedErr(coretypes.ErrInsufficientStorage,
-			fmt.Sprintf("specify at least %d bytes for the storage", stor))
-	}
-
 	req := virttypes.CreateGuestReq{
-		CPU:       int(opts.Quota),
-		Mem:       opts.Memory,
-		ImageName: opts.Image,
-		Volumes:   vols,
-		Labels:    opts.Labels,
+		CPU:        int(opts.Quota),
+		Mem:        opts.Memory,
+		ImageName:  opts.Image,
+		Volumes:    vols,
+		Labels:     opts.Labels,
+		AncestorID: opts.AncestorWorkloadID,
 	}
 
 	if dmiUUID, exists := opts.Labels[DmiUUIDKey]; exists {
@@ -275,9 +265,13 @@ func (v *Virt) VirtualizationUpdateResource(ctx context.Context, ID string, opts
 	return err
 }
 
-// VirtualizationCopyFrom copies from another.
+// VirtualizationCopyFrom copies file content from the container.
 func (v *Virt) VirtualizationCopyFrom(ctx context.Context, ID, path string) (io.ReadCloser, string, error) {
-	return nil, "", fmt.Errorf("VirtualizationCopyFrom does not implement")
+	rd, err := v.client.Cat(ctx, ID, path)
+	if err != nil {
+		return nil, "", err
+	}
+	return ioutil.NopCloser(rd), filepath.Base(path), nil
 }
 
 // VirtualizationExecute executes commands in running virtual unit

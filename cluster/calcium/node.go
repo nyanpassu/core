@@ -3,20 +3,33 @@ package calcium
 import (
 	"context"
 
+	"github.com/projecteru2/core/log"
 	"github.com/projecteru2/core/types"
 	"github.com/sanity-io/litter"
-	log "github.com/sirupsen/logrus"
 )
 
 // AddNode adds a node
 func (c *Calcium) AddNode(ctx context.Context, opts *types.AddNodeOptions) (*types.Node, error) {
+	if err := opts.Validate(); err != nil {
+		return nil, err
+	}
 	opts.Normalize()
 	return c.store.AddNode(ctx, opts)
 }
 
 // RemoveNode remove a node
 func (c *Calcium) RemoveNode(ctx context.Context, nodename string) error {
-	return c.withNodeLocked(ctx, nodename, func(node *types.Node) error {
+	if nodename == "" {
+		return types.ErrEmptyNodeName
+	}
+	return c.withNodeLocked(ctx, nodename, func(ctx context.Context, node *types.Node) error {
+		ws, err := c.ListNodeWorkloads(ctx, node.Name, nil)
+		if err != nil {
+			return err
+		}
+		if len(ws) > 0 {
+			return types.ErrNodeNotEmpty
+		}
 		return c.store.RemoveNode(ctx, node)
 	})
 }
@@ -28,13 +41,19 @@ func (c *Calcium) ListPodNodes(ctx context.Context, podname string, labels map[s
 
 // GetNode get node
 func (c *Calcium) GetNode(ctx context.Context, nodename string) (*types.Node, error) {
+	if nodename == "" {
+		return nil, types.ErrEmptyNodeName
+	}
 	return c.store.GetNode(ctx, nodename)
 }
 
 // SetNode set node available or not
 func (c *Calcium) SetNode(ctx context.Context, opts *types.SetNodeOptions) (*types.Node, error) { // nolint
+	if err := opts.Validate(); err != nil {
+		return nil, err
+	}
 	var n *types.Node
-	return n, c.withNodeLocked(ctx, opts.Nodename, func(node *types.Node) error {
+	return n, c.withNodeLocked(ctx, opts.Nodename, func(ctx context.Context, node *types.Node) error {
 		litter.Dump(opts)
 		opts.Normalize(node)
 		n = node

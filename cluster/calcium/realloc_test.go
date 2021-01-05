@@ -8,6 +8,7 @@ import (
 	enginemocks "github.com/projecteru2/core/engine/mocks"
 	enginetypes "github.com/projecteru2/core/engine/types"
 	lockmocks "github.com/projecteru2/core/lock/mocks"
+	resourcetypes "github.com/projecteru2/core/resources/types"
 	"github.com/projecteru2/core/scheduler"
 	complexscheduler "github.com/projecteru2/core/scheduler/complex"
 	schedulermocks "github.com/projecteru2/core/scheduler/mocks"
@@ -37,22 +38,24 @@ func TestRealloc(t *testing.T) {
 	c.config.Scheduler.ShareBase = 100
 
 	lock := &lockmocks.DistributedLock{}
-	lock.On("Lock", mock.Anything).Return(nil)
+	lock.On("Lock", mock.Anything).Return(context.TODO(), nil)
 	lock.On("Unlock", mock.Anything).Return(nil)
 
 	engine := &enginemocks.API{}
 	engine.On("VirtualizationInspect", mock.Anything, mock.Anything).Return(&enginetypes.VirtualizationInfo{}, nil)
 
 	node1 := &types.Node{
-		Name:       "node1",
-		MemCap:     int64(units.GiB),
-		CPU:        types.CPUMap{"0": 10, "1": 70, "2": 10, "3": 100},
-		InitCPU:    types.CPUMap{"0": 100, "1": 100, "2": 100, "3": 100},
-		Engine:     engine,
-		Endpoint:   "http://1.1.1.1:1",
-		NUMA:       types.NUMA{"2": "0"},
-		NUMAMemory: types.NUMAMemory{"0": 100000},
-		Volume:     types.VolumeMap{"/dir0": 100},
+		NodeMeta: types.NodeMeta{
+			Name:       "node1",
+			MemCap:     int64(units.GiB),
+			CPU:        types.CPUMap{"0": 10, "1": 70, "2": 10, "3": 100},
+			InitCPU:    types.CPUMap{"0": 100, "1": 100, "2": 100, "3": 100},
+			Endpoint:   "http://1.1.1.1:1",
+			NUMA:       types.NUMA{"2": "0"},
+			NUMAMemory: types.NUMAMemory{"0": 100000},
+			Volume:     types.VolumeMap{"/dir0": 100},
+		},
+		Engine: engine,
 	}
 
 	newC1 := func(context.Context, []string) []*types.Workload {
@@ -118,14 +121,14 @@ func TestRealloc(t *testing.T) {
 	simpleMockScheduler := &schedulermocks.Scheduler{}
 	scheduler.InitSchedulerV1(simpleMockScheduler)
 	c.scheduler = simpleMockScheduler
-	simpleMockScheduler.On("SelectCPUNodes", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil, 0, types.ErrInsufficientMEM).Once()
+	simpleMockScheduler.On("ReselectCPUNodes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(resourcetypes.ScheduleInfo{}, nil, 0, types.ErrInsufficientMEM).Once()
 	err = c.ReallocResource(ctx, newReallocOptions("c1", 0.1, 2*int64(units.MiB), nil, types.TriKeep, types.TriKeep))
 	assert.EqualError(t, err, "cannot alloc a plan, not enough memory")
 	store.AssertExpectations(t)
 	simpleMockScheduler.AssertExpectations(t)
 
 	// failed by wrong total
-	simpleMockScheduler.On("SelectCPUNodes", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil, 0, nil).Once()
+	simpleMockScheduler.On("ReselectCPUNodes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(resourcetypes.ScheduleInfo{}, nil, 0, nil).Once()
 	simpleMockScheduler.On("SelectStorageNodes", mock.Anything, mock.Anything, mock.Anything).Return(nil, 100, nil)
 	nodeVolumePlans := map[string][]types.VolumePlan{
 		"node1": {{types.MustToVolumeBinding("AUTO:/data:rw:50"): types.VolumeMap{"/dir0": 50}}},
@@ -149,11 +152,13 @@ func TestRealloc(t *testing.T) {
 	engine.On("VirtualizationUpdateResource", mock.Anything, mock.Anything, mock.Anything).Return(types.ErrBadWorkloadID).Once()
 	// reset node
 	node1 = &types.Node{
-		Name:     "node1",
-		MemCap:   int64(units.GiB),
-		CPU:      types.CPUMap{"0": 10, "1": 70, "2": 10, "3": 100},
-		Engine:   engine,
-		Endpoint: "http://1.1.1.1:1",
+		NodeMeta: types.NodeMeta{
+			Name:     "node1",
+			MemCap:   int64(units.GiB),
+			CPU:      types.CPUMap{"0": 10, "1": 70, "2": 10, "3": 100},
+			Endpoint: "http://1.1.1.1:1",
+		},
+		Engine: engine,
 	}
 	store.On("GetWorkloads", mock.Anything, []string{"c2"}).Return(newC2, nil)
 	err = c.ReallocResource(ctx, newReallocOptions("c2", 0.1, 2*int64(units.MiB), nil, types.TriKeep, types.TriKeep))
@@ -164,7 +169,7 @@ func TestRealloc(t *testing.T) {
 	store.AssertExpectations(t)
 
 	// failed by update workload
-	simpleMockScheduler.On("SelectCPUNodes", mock.Anything, mock.Anything, mock.Anything).Return(nil, nodeCPUPlans, 2, nil).Once()
+	simpleMockScheduler.On("ReselectCPUNodes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(resourcetypes.ScheduleInfo{}, nodeCPUPlans, 2, nil).Once()
 	simpleMockScheduler.On("SelectVolumeNodes", mock.Anything, mock.Anything).Return(nil, nil, 100, nil).Once()
 	engine.On("VirtualizationUpdateResource", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	store.On("UpdateWorkload", mock.Anything, mock.Anything).Return(types.ErrBadWorkloadID).Times(1)
@@ -182,7 +187,7 @@ func TestRealloc(t *testing.T) {
 			{types.MustToVolumeBinding("AUTO:/data:rw:100"): types.VolumeMap{"/dir4": 100}},
 		},
 	}
-	simpleMockScheduler.On("SelectCPUNodes", mock.Anything, mock.Anything, mock.Anything).Return(nil, nodeCPUPlans, 2, nil).Once()
+	simpleMockScheduler.On("ReselectCPUNodes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(resourcetypes.ScheduleInfo{}, nodeCPUPlans, 2, nil).Once()
 	simpleMockScheduler.On("SelectVolumeNodes", mock.Anything, mock.Anything).Return(nil, nodeVolumePlans, 4, nil).Once()
 	err = c.ReallocResource(ctx, newReallocOptions("c1", 0.1, int64(units.MiB), types.MustToVolumeBindings([]string{"AUTO:/data:rw:50"}), types.TriKeep, types.TriKeep))
 	assert.EqualError(t, err, "incompatible volume plans: cannot alloc a plan, not enough volume")
@@ -190,7 +195,7 @@ func TestRealloc(t *testing.T) {
 	store.AssertExpectations(t)
 
 	// failed by volume schedule error
-	simpleMockScheduler.On("SelectCPUNodes", mock.Anything, mock.Anything, mock.Anything).Return(nil, nodeCPUPlans, 2, nil).Once()
+	simpleMockScheduler.On("ReselectCPUNodes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(resourcetypes.ScheduleInfo{}, nodeCPUPlans, 2, nil).Once()
 	simpleMockScheduler.On("SelectVolumeNodes", mock.Anything, mock.Anything).Return(nil, nil, 0, types.ErrInsufficientVolume).Once()
 	err = c.ReallocResource(ctx, newReallocOptions("c1", 0.1, int64(units.MiB), types.MustToVolumeBindings([]string{"AUTO:/data:rw:1"}), types.TriKeep, types.TriKeep))
 	assert.EqualError(t, err, "cannot alloc a plan, not enough volume")
@@ -200,16 +205,18 @@ func TestRealloc(t *testing.T) {
 	// good to go
 	// rest everything
 	node2 := &types.Node{
-		Name:       "node2",
-		MemCap:     int64(units.GiB),
-		CPU:        types.CPUMap{"0": 10, "1": 70, "2": 10, "3": 100},
-		InitCPU:    types.CPUMap{"0": 100, "1": 100, "2": 100, "3": 100},
-		Engine:     engine,
-		Endpoint:   "http://1.1.1.1:1",
-		NUMA:       types.NUMA{"2": "0"},
-		NUMAMemory: types.NUMAMemory{"0": 100000},
-		Volume:     types.VolumeMap{"/dir0": 200, "/dir1": 200, "/dir2": 200},
+		NodeMeta: types.NodeMeta{
+			Name:       "node2",
+			MemCap:     int64(units.GiB),
+			CPU:        types.CPUMap{"0": 10, "1": 70, "2": 10, "3": 100},
+			InitCPU:    types.CPUMap{"0": 100, "1": 100, "2": 100, "3": 100},
+			Endpoint:   "http://1.1.1.1:1",
+			NUMA:       types.NUMA{"2": "0"},
+			NUMAMemory: types.NUMAMemory{"0": 100000},
+			Volume:     types.VolumeMap{"/dir0": 200, "/dir1": 200, "/dir2": 200},
+		},
 		VolumeUsed: int64(300),
+		Engine:     engine,
 	}
 	c3 := &types.Workload{
 		ID:      "c3",
@@ -251,7 +258,7 @@ func TestRealloc(t *testing.T) {
 			},
 		},
 	}
-	simpleMockScheduler.On("SelectCPUNodes", mock.Anything, mock.Anything, mock.Anything).Return(nil, nodeCPUPlans, 2, nil)
+	simpleMockScheduler.On("ReselectCPUNodes", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(resourcetypes.ScheduleInfo{}, nodeCPUPlans, 2, nil)
 	simpleMockScheduler.On("SelectVolumeNodes", mock.Anything, mock.Anything).Return(nil, nodeVolumePlans, 2, nil)
 	store.On("GetNode", mock.Anything, "node2").Return(node2, nil)
 	store.On("GetWorkloads", mock.Anything, []string{"c3"}).Return([]*types.Workload{c3}, nil)
@@ -276,7 +283,7 @@ func TestReallocBindCpu(t *testing.T) {
 		Name: "p1",
 	}
 	lock := &lockmocks.DistributedLock{}
-	lock.On("Lock", mock.Anything).Return(nil)
+	lock.On("Lock", mock.Anything).Return(context.TODO(), nil)
 	lock.On("Unlock", mock.Anything).Return(nil)
 	store.On("CreateLock", mock.Anything, mock.Anything).Return(lock, nil)
 	store.On("GetPod", mock.Anything, mock.Anything).Return(pod1, nil)
@@ -306,17 +313,19 @@ func TestReallocBindCpu(t *testing.T) {
 
 	//test bindCpu
 	node3 := &types.Node{
-		Name:       "node3",
-		MemCap:     int64(units.GiB),
-		CPU:        types.CPUMap{"0": 10, "1": 70, "2": 10, "3": 100},
-		InitCPU:    types.CPUMap{"0": 100, "1": 100, "2": 100, "3": 100},
+		NodeMeta: types.NodeMeta{
+			Name:       "node3",
+			MemCap:     int64(units.GiB),
+			CPU:        types.CPUMap{"0": 10, "1": 70, "2": 10, "3": 100},
+			InitCPU:    types.CPUMap{"0": 100, "1": 100, "2": 100, "3": 100},
+			Endpoint:   "http://1.1.1.1:1",
+			NUMA:       types.NUMA{"2": "0"},
+			NUMAMemory: types.NUMAMemory{"0": 100000},
+			Volume:     types.VolumeMap{"/dir0": 200, "/dir1": 200, "/dir2": 200},
+		},
+		VolumeUsed: int64(300),
 		CPUUsed:    2.1,
 		Engine:     engine,
-		Endpoint:   "http://1.1.1.1:1",
-		NUMA:       types.NUMA{"2": "0"},
-		NUMAMemory: types.NUMAMemory{"0": 100000},
-		Volume:     types.VolumeMap{"/dir0": 200, "/dir1": 200, "/dir2": 200},
-		VolumeUsed: int64(300),
 	}
 	c5 := &types.Workload{
 		ID:      "c5",

@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
+	"github.com/projecteru2/core/log"
 
 	"github.com/docker/go-units"
 	enginetypes "github.com/projecteru2/core/engine/types"
@@ -86,7 +86,7 @@ func (b *unitBuilder) buildNetworkLimit() *unitBuilder {
 		return b
 	}
 
-	network := b.opts.Network
+	network := ""
 	for net := range b.opts.Networks {
 		if net != "" {
 			network = net

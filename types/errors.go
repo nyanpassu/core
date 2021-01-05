@@ -23,8 +23,9 @@ var (
 
 	ErrZeroNodes = errors.New("no nodes provide to choose some")
 
-	ErrNodeFormat = errors.New("bad endpoint name")
-	ErrNodeExist  = errors.New("node already exists")
+	ErrNodeFormat   = errors.New("bad endpoint name")
+	ErrNodeExist    = errors.New("node already exists")
+	ErrNodeNotEmpty = errors.New("node not empty, still has workloads associated")
 
 	ErrKeyIsDir    = errors.New("key is a directory")
 	ErrKeyIsNotDir = errors.New("key is not a directory")
@@ -79,9 +80,30 @@ var (
 
 	ErrNodeNotExists     = errors.New("node not exists")
 	ErrWorkloadNotExists = errors.New("workload not exists")
+
+	ErrUnregisteredWALEventType = errors.New("unregistered WAL event type")
+	ErrInvalidWALBucket         = errors.New("invalid WAL bucket")
+	ErrLockSessionDone          = errors.New("lock session done")
 )
 
 // NewDetailedErr returns an error with details
 func NewDetailedErr(err error, details interface{}) error {
 	return fmt.Errorf("%w: %v", err, details)
 }
+
+// validation errors
+var (
+	ErrEmptyNodeName     = errors.New("node name is empty")
+	ErrEmptyAppName      = errors.New("app name is empty")
+	ErrEmptyPodName      = errors.New("pod name is empty")
+	ErrEmptyNodeEndpoint = errors.New("node endpoint is empty")
+	ErrEmptyImage        = errors.New("image is empty")
+	ErrEmptyCount        = errors.New("count is 0")
+	ErrEmptyWorkloadID   = errors.New("workload id is empty")
+
+	ErrEmptyEntrypointName       = errors.New("entrypoint name is empty")
+	ErrUnderlineInEntrypointName = errors.New("entrypoint name has '_' character")
+
+	ErrNoFilesToSend = errors.New("no files to send")
+	ErrNoFilesToCopy = errors.New("no files to copy")
+)
