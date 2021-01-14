@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -9,12 +10,15 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
+
 	"github.com/projecteru2/core/auth"
+	"github.com/projecteru2/core/cluster"
 	"github.com/projecteru2/core/cluster/calcium"
 	"github.com/projecteru2/core/log"
 	"github.com/projecteru2/core/metrics"
 	"github.com/projecteru2/core/rpc"
 	pb "github.com/projecteru2/core/rpc/gen"
+	"github.com/projecteru2/core/types"
 	"github.com/projecteru2/core/utils"
 	"github.com/projecteru2/core/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -48,6 +52,17 @@ func setupSentry(dsn string) (func(), error) {
 	})
 }
 
+func newCluster(config types.Config, embeddedStorage bool) (cluster.Cluster, func(context.Context) (func(), error), error) {
+	cluster, err := calcium.New(config, embeddedStorage)
+	if err != nil {
+		return cluster, nil, err
+	}
+
+	return cluster, func(ctx context.Context) (func(), error) {
+		return cluster.RegisterService(ctx)
+	}, err
+}
+
 func serve(c *cli.Context) error {
 	config, err := utils.LoadConfig(configPath)
 	if err != nil {
@@ -69,7 +84,7 @@ func serve(c *cli.Context) error {
 		return err
 	}
 
-	cluster, err := calcium.New(config, embeddedStorage)
+	cluster, clusterReg, err := newCluster(config, embeddedStorage)
 	if err != nil {
 		log.Errorf("[main] %v", err)
 		return err
@@ -114,7 +129,7 @@ func serve(c *cli.Context) error {
 		}()
 	}
 
-	unregisterService, err := cluster.RegisterService(c.Context)
+	unregisterService, err := clusterReg(c.Context)
 	if err != nil {
 		log.Errorf("[main] failed to register service: %v", err)
 		return err
